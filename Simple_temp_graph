@@ -1,0 +1,114 @@
+---
+title: "Temperature"
+author: "Agnes Thunem"
+format: html
+editor: source
+---
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(dplyr)
+
+# Read seasonal temperature observations
+weather <- read_excel("temperatur_mjlfjell.xlsx") |>
+  mutate(
+    tid = as.character(`Tid(norsk normaltid)`),
+    season_code = substr(tid, 1, 2),
+    aar = as.numeric(sub("^[0-9]{2}\\.", "", tid)),
+    season = factor(season_code, levels = c("12", "03", "06", "09"),
+                    labels = c("Winter", "Spring", "Summer", "Autumn"))
+  )
+
+# Temperature adjustment from Mjølfjell (628 m) to Trettetjørn (810 m)
+temperature_adjustment <- ((810 - 628) / 100) * 0.57
+
+sommer <- weather |>
+  filter(season_code == "06", !is.na(aar), !is.na(`Middeltemperatur (årstid)`)) |>
+  mutate(trettetjorn_temperature = `Middeltemperatur (årstid)` - temperature_adjustment)
+```
+
+## Summer temperatures and linear trends
+
+```{r}
+# Show observed temperatures as connected points, with red lm trend lines.
+ggplot(sommer, aes(x = aar, y = `Middeltemperatur (årstid)`)) +
+  geom_line(color = "black", linewidth = 0.6) +
+  geom_point(color = "black", size = 1.8) +
+  geom_smooth(method = "lm", se = FALSE, color = "red", linewidth = 1) +
+  geom_smooth(aes(y = trettetjorn_temperature), method = "lm",
+              se = FALSE, color = "red", linetype = "dashed", linewidth = 1) +
+  scale_x_continuous(breaks = sommer |> pull(aar) |> unique() |> sort()) +
+  labs(title = "Mean Summer Temperature",
+       x = "Year", y = "Temperature (°C)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Summer temperature data
+
+```{r}
+sommer |>
+  select(tid, aar, `Middeltemperatur (årstid)`, trettetjorn_temperature)
+```
+
+## Linear model and ANOVA
+
+```{r}
+# ANOVA tests whether year explains a significant amount of variation
+# in summer temperature.
+model_mjolfjell <- lm(`Middeltemperatur (årstid)` ~ aar, data = sommer)
+summary(model_mjolfjell)
+anova(model_mjolfjell)
+
+# Trettetjørn is a constant downward adjustment, so its slope,
+# F statistic and p-value are identical to those for Mjølfjell.
+model_trettetjorn <- lm(trettetjorn_temperature ~ aar, data = sommer)
+summary(model_trettetjorn)
+anova(model_trettetjorn)
+```
+
+## Mean summer and winter temperatures at Trettetjørn
+
+```{r}
+vinter <- weather |>
+  filter(season_code == "12", !is.na(aar))
+
+mean_summer_trettetjorn <- sommer |> summarise(value = mean(trettetjorn_temperature, na.rm = TRUE)) |> pull(value)
+mean_winter_trettetjorn <- (vinter |> summarise(value = mean(`Middeltemperatur (årstid)`, na.rm = TRUE)) |> pull(value)) -
+  temperature_adjustment
+
+cat("Trettetjørn mean summer temperature:",
+    round(mean_summer_trettetjorn, 1), "°C\n")
+cat("Trettetjørn mean winter temperature:",
+    round(mean_winter_trettetjorn, 1), "°C\n")
+```
+
+## Mean seasonal temperature
+
+```{r}
+# Summarise each season with native pipes and dplyr
+season_summary <- weather |>
+  filter(!is.na(season), !is.na(`Middeltemperatur (årstid)`)) |>
+  group_by(season) |>
+  summarise(
+    mean_temp = mean(`Middeltemperatur (årstid)`),
+    sd_temp = sd(`Middeltemperatur (årstid)`),
+    .groups = "drop"
+  ) |>
+  mutate(trettetjorn_temp = mean_temp - temperature_adjustment)
+
+# Retain the seasonal means, standard deviation ribbon and red
+# altitude-adjusted Trettetjørn series.
+ggplot(season_summary, aes(x = season, y = mean_temp, group = 1)) +
+  geom_ribbon(aes(ymin = mean_temp - sd_temp, ymax = mean_temp + sd_temp),
+              alpha = 0.2) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  geom_line(aes(y = trettetjorn_temp), color = "red",
+            linetype = "dashed", linewidth = 1) +
+  geom_point(aes(y = trettetjorn_temp), color = "red", size = 2.5) +
+  labs(title = "Mean Seasonal Temperature", x = "Season",
+       y = "Temperature (°C)") +
+  theme_classic()
+```
