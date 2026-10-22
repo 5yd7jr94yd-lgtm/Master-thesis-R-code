@@ -1,0 +1,201 @@
+---
+title: "Alternative PLUM models"
+author: "Agnes Thunem"
+format: html
+editor: source
+---
+```{r}
+library(rplum)
+library(rbacon)
+library(readxl)
+library(dplyr)
+library(knitr)
+
+coredir <- "Plum_runs"
+thick_cm <- 1
+sample_depths <- c(seq(0.5, 24.5, by = 1), 25.25)
+curve_depths <- seq(0.25, 25, by = 0.25)
+
+dat <- read_excel("TRET25_rplum_simple.xlsx", sheet = "input")
+
+pb_input <- dat |>
+  filter(Type == "Pb210") |>
+  arrange(Bottom_depth_cm) |>
+  transmute(labID = Sample, depth = Bottom_depth_cm,
+            density = Density_est_g_cm3,
+            Pb210 = Total_Pb210_Bq_kg, error = Total_Pb210_error,
+            thickness = Thickness_cm,
+            supported = Supported_Pb210_Bq_kg,
+            supported_error = Supported_Pb210_error)
+
+c14_input <- dat |>
+  filter(Type == "C14") |>
+  transmute(labID = Sample, age = C14_age_BP, error = C14_error,
+            depth = Mid_depth_cm, cc = 1)
+
+fallout_input <- dat |>
+  filter(grepl("^Fallout", Type)) |>
+  transmute(labID = Sample, age = C14_age_BP, error = C14_error,
+            depth = Mid_depth_cm, cc = 0)
+
+age_at <- function(d) {
+  ages <- Bacon.Age.d(d, set = info, BCAD = FALSE)
+  ages <- ages[is.finite(ages)]
+  data.frame(depth_cm = d,
+             median_cal_yr_BP = median(ages),
+             lower95_cal_yr_BP = unname(quantile(ages, 0.025)),
+             upper95_cal_yr_BP = unname(quantile(ages, 0.975)))
+}
+```
+
+```{r}
+# scenarios to test, dont hace to run all at once 
+versions_to_run <- c("allpb_single_nomark", "allpb_single_mark",
+                     "pb45_single_nomark", "pb45_single_mark",
+                     "pb45_boundary_nomark", "pb45_hiatus_nomark",
+                     "pb45_boundary_mark", "pb45_hiatus_mark")
+
+break_cm <- 4.5
+hiatus_max <- 100
+anne_depth_cm <- 8.5
+anne_age_BP <- 68
+anne_error <- 10   # plotting assumption
+
+specs <- data.frame(
+  id = c("allpb_single_nomark", "allpb_single_mark",
+         "pb45_single_nomark", "pb45_single_mark",
+         "pb45_boundary_nomark", "pb45_hiatus_nomark",
+         "pb45_boundary_mark", "pb45_hiatus_mark"),
+  label = c("1: all Pb, no markers", "2: all Pb, markers",
+            "3: Pb to 4.5, no markers", "4: Pb to 4.5, markers",
+            "5a: boundary, no markers", "5b: hiatus, no markers",
+            "6a: boundary, markers", "6b: hiatus, markers"),
+  pb = c("all", "all", "cut", "cut", "cut", "cut", "cut", "cut"),
+  structure = c("single", "single", "single", "single",
+                "boundary", "hiatus", "boundary", "hiatus"),
+  markers = c(FALSE, TRUE, FALSE, TRUE, FALSE, FALSE, TRUE, TRUE),
+  col = c("#CC79A7", "#CC79A7", "#0072B2", "#0072B2",
+          "#009E73", "#D55E00", "#009E73", "#D55E00")
+)
+specs$core <- paste0("TRET25_", specs$id, "_thick1")
+```
+
+## Run alternative models
+
+```{r}
+fit_version <- function(id) {
+  sp <- specs[specs$id == id, ]
+  core <- sp$core
+  folder <- file.path(coredir, core)
+  dir.create(folder, recursive = TRUE, showWarnings = FALSE)
+
+  pb_limit <- if (sp$pb == "cut") 4.5 else 10
+  pb_i <- pb_input |> filter(depth <= pb_limit)
+  dates_i <- c14_input
+  if (sp$markers) dates_i <- bind_rows(dates_i, fallout_input)
+  dates_i <- dates_i |> arrange(depth)
+
+  dates_file <- paste0(core, "_C14.csv")
+  write.csv(pb_i, file.path(folder, paste0(core, ".csv")), row.names = FALSE)
+  write.csv(dates_i, file.path(folder, dates_file), row.names = FALSE)
+
+  args <- list(core = core, coredir = coredir, otherdates = dates_file,
+               date.sample = 2025, ra.case = 2, n.supp = 0, Bqkg = TRUE,
+               cc1 = "IntCal20", BCAD = FALSE,
+               thick = thick_cm,
+               acc.mean = if (sp$structure == "single") 30 else c(20, 40),
+               d.min = 0, d.max = 25.25, d.by = 0.5,
+               remember = FALSE, ask = FALSE, suggest = FALSE,
+               plot.pdf = FALSE)
+  if (sp$structure == "boundary") args$boundary <- break_cm
+  if (sp$structure == "hiatus") {
+    args$hiatus.depths <- break_cm
+    args$hiatus.max <- hiatus_max
+  }
+
+  pdf(NULL)
+  do.call(Plum, args)
+  dev.off()
+
+  curve <- lapply(curve_depths, age_at) |> bind_rows()
+  write.csv(curve, file.path(folder, "age_depth_curve.csv"), row.names = FALSE)
+  curve
+}
+
+curves <- lapply(versions_to_run, fit_version)
+names(curves) <- versions_to_run
+found <- specs |> filter(id %in% versions_to_run)
+```
+
+## Comparison plotting functions
+
+```{r}
+add_reference_points <- function(max_depth) {
+  segments(fallout_input$age - fallout_input$error, fallout_input$depth,
+           fallout_input$age + fallout_input$error, fallout_input$depth,
+           col = "firebrick", lwd = 2)
+  points(fallout_input$age, fallout_input$depth,
+         pch = 19, col = "firebrick", cex = 1.2)
+  if (anne_depth_cm <= max_depth) {
+    segments(anne_age_BP - anne_error, anne_depth_cm,
+             anne_age_BP + anne_error, anne_depth_cm,
+             col = "black", lwd = 2)
+    points(anne_age_BP, anne_depth_cm, pch = 18, cex = 1.8)
+  }
+}
+
+plot_all <- function(max_depth, max_age, title) {
+  plot(NA, xlim = c(-80, max_age), ylim = c(max_depth, 0),
+       xlab = "cal yr BP", ylab = "depth (cm)", main = title)
+  for (i in seq_len(nrow(found))) {
+    cv <- curves[[found$id[i]]] |> filter(depth_cm <= max_depth)
+    lines(cv$median_cal_yr_BP, cv$depth_cm,
+          col = found$col[i], lwd = 2,
+          lty = if (found$markers[i]) 1 else 2)
+  }
+  abline(h = break_cm, lty = 3, col = "grey40")
+  add_reference_points(max_depth)
+  legend("topright", legend = c(found$label, "Fallout markers", "Anne charcoal peak"),
+         col = c(found$col, "firebrick", "black"),
+         lty = c(ifelse(found$markers, 1, 2), NA, NA),
+         lwd = c(rep(2, nrow(found)), NA, NA),
+         pch = c(rep(NA, nrow(found)), 19, 18),
+         bty = "n", cex = 0.7)
+}
+
+plot_one <- function(i, max_depth, max_age) {
+  cv <- curves[[found$id[i]]] |> filter(depth_cm <= max_depth)
+  plot(NA, xlim = c(-80, max_age), ylim = c(max_depth, 0),
+       xlab = "cal yr BP", ylab = "depth (cm)",
+       main = found$label[i], cex.main = 0.9)
+  polygon(c(cv$lower95_cal_yr_BP, rev(cv$upper95_cal_yr_BP)),
+          c(cv$depth_cm, rev(cv$depth_cm)),
+          col = adjustcolor(found$col[i], alpha.f = 0.2), border = NA)
+  lines(cv$median_cal_yr_BP, cv$depth_cm,
+        col = found$col[i], lwd = 2,
+        lty = if (found$markers[i]) 1 else 2)
+  abline(h = break_cm, lty = 3, col = "grey40")
+  add_reference_points(max_depth)
+}
+```
+
+## Median age curves
+
+```{r}
+#| fig-width: 15
+#| fig-height: 7.5
+par(mfrow = c(1, 2))
+plot_all(25, 800, "Whole core")
+plot_all(12, 300, "Top 12 cm")
+par(mfrow = c(1, 1))
+```
+
+## Individual 95% credible intervals
+
+```{r}
+#| fig-width: 16
+#| fig-height: 9
+par(mfrow = c(2, 4))
+for (i in seq_len(nrow(found))) plot_one(i, 25.25, 900)
+par(mfrow = c(1, 1))
+```
