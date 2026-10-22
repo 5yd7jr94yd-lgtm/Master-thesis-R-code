@@ -3,6 +3,7 @@ This repository contains scripts used for age-depth modelling and pollen and spo
 
 Contents
 plum_age_depth_model.qmd : age model
+
 Main_analysis.qmd : Pollen and spore percentages, ordination, diversity, zonation and influx analyses.
 
 alternative_plum_models/ : Alternative age-depth model configurations explored during the analysis.
