@@ -1,0 +1,1270 @@
+---
+title: "Final pollen and spore analysis"
+author: "Agnes Thunem"
+format: html
+editor: source
+---
+
+# Import pollen counts and calculate percentages
+```{r}
+# Load packages used in the analysis
+library(readxl)
+library(vegan)
+library(rioja)
+library(ggplot2)
+library(ggrepel)
+library(dplyr)
+library(tidyr)
+library(iNEXT)
+library(viridisLite)
+library(writexl)
+library(grid)
+library(readr)
+
+my_count <- read_excel("my samples count done.xlsx",sheet = "my count",range = "A1:AA67",col_names = FALSE)
+
+sample_names <- as.character(unlist(my_count[1, -1])) #sample names row 1
+depth_midpoint_spore <- as.numeric(unlist(my_count[3, -1])) #depth midpoints row 3
+names(depth_midpoint_spore) <- sample_names #Match
+
+taxon_counts <- as.data.frame(my_count[7:67, -1])#taxa in rows 7–67
+rownames(taxon_counts) <- as.character(unlist(my_count[7:67, 1]))
+colnames(taxon_counts) <- sample_names #Assign taxon names and sample names
+taxon_counts[] <- lapply(taxon_counts, as.numeric)#make sure numeric values
+```
+
+```{r}
+# Exclude these taxa from the main pollen and spore sum (ΣP)
+excluded_from_main_sum <- c("Dryopteris-type", "Sphagnum", "Lycopodium counted", "Unknown")
+all_counts <- as.data.frame(t(taxon_counts))
+main_pollen_spore_counts <- all_counts[
+  , !names(all_counts) %in% excluded_from_main_sum,
+  drop = FALSE]
+
+# Match sediment depth midpoints to the sample order and make sum for each
+depth_spore <- as.numeric(depth_midpoint_spore[rownames(main_pollen_spore_counts)])
+pollen_spore_sums <- rowSums(main_pollen_spore_counts)
+
+# Calculate percentages for all taxa included in the main sum
+pollen_spore_percentage <- main_pollen_spore_counts |>
+  sweep(1, pollen_spore_sums, "/") * 100
+
+# Calculate Dryopteris-type percentage using ΣP + Dryopteris-type
+dryopteris_counts <- all_counts[["Dryopteris-type"]]
+dryopteris_percentage <- dryopteris_counts /
+  (pollen_spore_sums + dryopteris_counts) * 100
+
+# Calculate Sphagnum percentage using ΣP + Sphagnum
+sphagnum_counts <- all_counts[["Sphagnum"]]
+sphagnum_percentage <- sphagnum_counts /
+  (pollen_spore_sums + sphagnum_counts) * 100
+
+# Add Dryopteris-type and Sphagnum to the percentage table so they can be displayed but do not contribute to ΣP
+pollen_spore_percentage[["Dryopteris-type"]] <- dryopteris_percentage
+pollen_spore_percentage[["Sphagnum"]] <- sphagnum_percentage
+```
+
+## Import ages from PLUM model, make sure correct version
+
+```{r}
+pollen_ages <- read.csv("Plum_runs/pollen_sample_ages.csv")#Import ages
+
+age_spore <- pollen_ages$median_cal_yr_BP[match(rownames(main_pollen_spore_counts), as.character(pollen_ages$sample))]#Match ages to samples
+
+# Display sample depths and corresponding modelled ages
+age_depth_table <- data.frame(sample = rownames(main_pollen_spore_counts),
+  depth_cm = depth_spore,median_cal_yr_BP = age_spore)
+
+print(age_depth_table)
+```
+
+# Loss-on-ignition (LOI)
+
+```{r}
+loi_raw <- read_excel("glødetap.xlsx", sheet = "Sheet1") |>
+  transmute(
+    beaker_nr = as.character(`beaker nr`),
+    dry_g = as.numeric(`beaker+dry`) - as.numeric(beaker),
+    ash_g = as.numeric(`beaker+burnt`) - as.numeric(beaker)
+  ) |>
+  mutate(LOI_percent = (dry_g - ash_g) / dry_g * 100)
+
+pollen_ids <- rownames(main_pollen_spore_counts)#Match values to pollen samples
+LOI_spore_plot <- loi_raw$LOI_percent[match(pollen_ids, loi_raw$beaker_nr)]
+
+names(LOI_spore_plot) <- pollen_ids
+```
+
+# Charcoal counts
+
+```{r}
+charcoal_raw <- read_excel("charcoal.xlsx", sheet = "Sheet1") |>
+  transmute(
+    sample = as.character(sample),
+    charcoal_3T = as.numeric(charcoal),
+    lycopodium_3T = as.numeric(lycopodium),
+    lycopodium_full = as.numeric(`pollen lycopodium`)
+  ) |>
+  mutate(
+    # Adjust charcoal counts to the full pollen counting effort
+    charcoal_adjusted = charcoal_3T * lycopodium_full / lycopodium_3T
+  )
+
+charcoal_spore_plot <- charcoal_raw$charcoal_adjusted[match(pollen_ids, charcoal_raw$sample)]#Match adjusted charcoal values to pollen samples
+names(charcoal_spore_plot) <- pollen_ids 
+#Assign sample names to the adjusted values and check on original and adjusted values for each pollen sample
+charcoal_mapping_check <- charcoal_raw[match(pollen_ids, charcoal_raw$sample),]
+print(charcoal_mapping_check)
+# Identify samples with fewer than 20 Lycopodium spores in three transects
+# These adjusted values may be sensitive to small counting differences
+low_lyco_charcoal <- charcoal_mapping_check |>filter(lycopodium_3T < 20 | !is.finite(charcoal_adjusted))
+print(low_lyco_charcoal)
+```
+
+# Ordination: DCA and PCA
+
+```{r}
+#| fig-width: 10
+#| fig-height: 7
+#| fig-align: center
+
+# Use all taxa in the main pollen and spore assemblage
+ordination_data <- main_pollen_spore_counts
+# percentages for DCA
+ordination_percent <- decostand(ordination_data, "total") * 100 
+dca_model <- decorana(ordination_percent)
+print(dca_model) # Display DCA results
+
+# Hellinger-transform the assemblage before PCA
+ordination_hellinger <- decostand(ordination_data, "hellinger")
+pca_model <- prcomp(ordination_hellinger)
+
+# Calculate percentage of variance explained by each PCA axis
+pca_variance <- 100 * pca_model$sdev^2 / sum(pca_model$sdev^2)
+print(round(pca_variance[1:2], 2))# Display
+
+# DCA PLOT, Extract taxon scores for the first two DCA axes
+dca_taxa <- as.data.frame(
+  scores(dca_model, display = "species", choices = 1:2)
+)
+colnames(dca_taxa) <- c("Axis1", "Axis2")
+dca_taxa$Taxon <- rownames(dca_taxa)
+
+# Label the 15 taxa furthest from the origin
+top_dca_taxa <- dca_taxa |>
+  mutate(distance = sqrt(Axis1^2 + Axis2^2)) |>
+  slice_max(distance, n = 15, with_ties = FALSE)
+
+# Plot all taxa, highlighting and labelling the 15 most extreme
+fig_dca_percent <- ggplot(dca_taxa, aes(Axis1, Axis2)) +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey75") +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey75") +
+  geom_point(colour = "grey65", size = 1.5) +
+  geom_point(data = top_dca_taxa, size = 2.5) +
+  geom_text_repel(data = top_dca_taxa,aes(label = Taxon),size = 3.5,seed = 123,
+    max.overlaps = Inf) +
+  labs(title = "DCA – pollen and spore percentages",
+    subtitle = "All taxa in the main sum; 15 most extreme taxa labelled",
+    x = "DCA1",y = "DCA2") +
+  theme_bw(base_size = 12)
+
+# PCA PLOT, Extract sample scores for PCA1 and PCA2
+pca_diagram_scores <- as.data.frame(pca_model$x[, 1:2])
+colnames(pca_diagram_scores) <- c("PCA1", "PCA2")
+
+pca_samples <- pca_diagram_scores
+pca_samples$Depth_cm <- as.character(depth_midpoint_spore[rownames(pca_samples)])#sediment depth midpoint for each sample
+
+pca_loadings <- as.data.frame(pca_model$rotation[, 1:2])#Extract taxon loadings for PCA1 and PCA2
+colnames(pca_loadings) <- c("PC1", "PC2")
+pca_loadings$Taxon <- rownames(pca_loadings)
+
+# Select the 15 taxa with the largest loading-vector lengths
+pca_loadings <- pca_loadings |>
+  mutate(distance = sqrt(PC1^2 + PC2^2)) |>
+  slice_max(distance, n = 15, with_ties = FALSE)
+
+# Scale taxon arrows to fit alongside the sample scores
+# This changes arrow display lengths, not the PCA calculations
+arrow_scale <- 0.75 *
+  max(abs(as.matrix(pca_samples[, c("PCA1", "PCA2")]))) /
+  max(abs(as.matrix(pca_loadings[, c("PC1", "PC2")])))
+
+pca_loadings <- pca_loadings |>mutate(arrow_x = PC1 * arrow_scale,
+    arrow_y = PC2 * arrow_scale)
+
+# Plot sample scores and taxon loading arrows
+fig_pca_depth <- ggplot(pca_samples, aes(PCA1, PCA2)) +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey75") +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey75") +
+  geom_point(size = 1.7) +
+  geom_text_repel(aes(label = Depth_cm),size = 3,seed = 123,max.overlaps = Inf,
+    min.segment.length = 0) +
+  geom_segment(data = pca_loadings,aes(x = 0, y = 0, xend = arrow_x, yend = arrow_y),inherit.aes = FALSE,colour = "firebrick",arrow = arrow(length = unit(0.16, "cm"))
+  ) +
+  geom_text_repel(data = pca_loadings,aes(x = arrow_x, y = arrow_y, label = Taxon),
+    inherit.aes = FALSE,colour = "firebrick",size = 3,seed = 123,max.overlaps = Inf
+  ) +
+  labs(title = "PCA biplot – Trettetjørn",
+    x = paste0("PC1 (", round(pca_variance[1], 1), "%)"),
+    y = paste0("PC2 (", round(pca_variance[2], 1), "%)")) +
+  theme_bw(base_size = 12)
+
+print(fig_dca_percent)
+print(fig_pca_depth)
+```
+
+```{r}
+pca_loadings_all <- pca_model$rotation[, 1:2]#PCA1 and PCA2 loadings
+
+#Calculate each taxon's percentage contribution
+taxon_contributions <- data.frame(Taxon = rownames(pca_loadings_all),
+  PC1_contribution = 100 * pca_loadings_all[, 1]^2,
+  PC2_contribution = 100 * pca_loadings_all[, 2]^2)
+
+top_PC1 <- taxon_contributions |>arrange(desc(PC1_contribution)) |>head(15)
+top_PC2 <- taxon_contributions |>arrange(desc(PC2_contribution)) |>head(15)
+
+print(top_PC1)
+print(top_PC2)
+```
+
+# Biodiversity, rarefaction and Hill numbers
+
+```{r}
+# just Observed pollen + spore taxon richness STILL NO DRYOPTERIS AND SPHAGNUM
+richness_spore_observed <- rowSums(main_pollen_spore_counts > 0)
+richness_spore_observed
+```
+
+## Rarefaction curves
+
+```{r}
+#| fig-width: 9
+#| fig-height: 5
+#| 
+sample_colours_spore <- viridis(nrow(main_pollen_spore_counts))
+
+# Plot expected taxon richness against the number of grains counted
+rarecurve(main_pollen_spore_counts,step = 10,col = sample_colours_spore,
+  lwd = 2,label = FALSE,xlab = "Pollen + spores counted",ylab = "Expected pollen + spore taxa")
+
+# Mark the chosen standardisation threshold of 278 grains
+abline(v = 278,col = "grey35",lty = 2,lwd = 1.5)
+```
+
+## N0 rarified curve for diagram
+
+```{r}
+rarefaction_level <- 278
+
+# only samples with at least 278, goodbye 1, 2 and 26
+pollen_spore_counts_filtered <- main_pollen_spore_counts[rowSums(main_pollen_spore_counts) >= rarefaction_level,,drop = FALSE]
+
+# Calculate expected taxon richness (N0) at 278 grains
+N0_spore_rarefied <- rarefy(pollen_spore_counts_filtered,sample = rarefaction_level)
+print(N0_spore_rarefied)
+```
+
+## Graph rarefied at 278 for all hill numbers
+
+```{r}
+# Convert the retained pollen and spore samples into a list for iNEXT
+pollen_spore_list_278 <- lapply(seq_len(nrow(pollen_spore_counts_filtered)),
+  function(i) as.numeric(pollen_spore_counts_filtered[i, ]))
+
+names(pollen_spore_list_278) <- rownames(pollen_spore_counts_filtered)
+
+# Calculate Hill diversity (N0, N1 and N2) at 278 grains
+hill_spore_278 <- estimateD(pollen_spore_list_278,datatype = "abundance",
+  base = "size",level = rarefaction_level,q = c(0, 1, 2)) |>
+  mutate(
+    # Match modelled ages to sample IDs
+    Age_cal_yr_BP = age_depth_table$median_cal_yr_BP[
+      match(as.character(Assemblage), age_depth_table$sample)]) |>
+  arrange(Age_cal_yr_BP, Order.q)
+
+# Calculate evenness as the ratio of N2 to N1
+evenness_278 <- hill_spore_278 |>select(Assemblage, Order.q, qD) |>
+  pivot_wider(names_from = Order.q,values_from = qD,names_prefix = "N") |>
+  mutate(Evenness_N2_N1 = N2 / N1,Age_cal_yr_BP = age_depth_table$median_cal_yr_BP[
+      match(as.character(Assemblage), age_depth_table$sample)])
+
+print(evenness_278)
+```
+
+## Plot over time
+
+```{r}
+#| fig-width: 6
+#| fig-height: 9
+
+# Prepare Hill diversity data at 278 grains
+hill_plot_278 <- hill_spore_278 |>mutate(Diversity = factor(
+      Order.q,levels = c(0, 1, 2),labels = c(
+        "N0 – Richness",
+        "N1 – Shannon",
+        "N2 – Simpson")
+      )) |>arrange(Age_cal_yr_BP, Order.q)
+
+ggplot(hill_plot_278,aes(x = Age_cal_yr_BP,y = qD,colour = Diversity,linetype = Diversity,group = Diversity)) +
+  # Connect individual sample values
+  geom_line(linewidth = 0.6) +
+  geom_point(size = 1.5) +
+  # GAM smooth for each diversity measure
+  geom_smooth(method = "gam",formula = y ~ s(x, k = 5),se = TRUE,linewidth = 1) +
+  
+  scale_colour_grey(start = 0,end = 0.7) +  # Greyscale
+  scale_linetype_manual(values = c("solid","dashed","dotted")) +
+  coord_flip() +   # Flip so age is vertical
+  scale_x_reverse(
+    breaks = seq(0, 500, 100)
+  )+  # Older ages at the bottom
+  labs(title = "Rarefied pollen and spore diversity",
+    x = "Age (cal yr BP)", y = "Effective number of taxa",colour = "Hill number",
+    linetype = "Hill number") +
+  
+  theme_classic()
+```
+
+```{r}
+library(mgcv)
+
+richness_data <- hill_spore_278 |> filter(Order.q == 2)
+richness_gam <- gam(qD ~ s(Age_cal_yr_BP, k = 5),data = richness_data,method = "REML")
+summary(richness_gam)
+```
+
+```{r}
+gam.check(richness_gam)
+```
+
+# CONISS zonation
+
+```{r}
+# Calculate Bray-Curtis dissimilarity from pollen and spore percentages
+# Include all taxa in the main pollen and spore sum
+coniss_dissimilarity <- vegdist(ordination_percent,method = "bray")
+coniss_model <- chclust(coniss_dissimilarity,method = "coniss")
+
+plot(coniss_model)
+bstick(coniss_model)
+```
+
+# Pollen diagram
+
+```{r}
+# Keep taxa exceeding 2% in at least one sample
+pollen_spore_percentage_subset <- pollen_spore_percentage[, colSums(pollen_spore_percentage >= 2, na.rm = TRUE) > 0,drop = FALSE]
+
+# Exaggerate taxa with mean abundance below 5%
+exaggerate_spore <- colMeans(pollen_spore_percentage_subset,na.rm = TRUE) < 5
+
+# Functional groups
+taxon_groups <- c(
+  # Trees
+  "Alnus" = "tree",
+  "Betula" = "tree",
+  "Corylus" = "tree",
+  "Fraxinus" = "tree",
+  "Juglans" = "tree",
+  "Picea" = "tree",
+  "Pinus sylvestris" = "tree",
+  "Quercus" = "tree",
+  "Sorbus-type" = "tree",
+  "Tilia cordata" = "tree",
+  "Ulmus" = "tree",
+  
+  # Shrubs
+  "Juniperus communis" = "shrub",
+  "Salix undiff." = "shrub",
+  
+  # Dwarf shrubs
+  "Calluna vulgaris" = "dwarf_shrub",
+  "Empetrum nigrum" = "dwarf_shrub",
+  "Vaccinium-type" = "dwarf_shrub", 
+  "Rubus chamaemorus" = "dwarf_shrub",
+  
+  # Grasses and sedges
+  "Cyperaceae undiff." = "graminoid",
+  "Poaceae" = "graminoid",
+  
+  # Herbs / forbs
+  "Apiaceae undiff." = "forb",
+  "Artemisia" = "forb",
+  "Brassicaceae" = "forb",
+  "Caltha-type" = "forb",
+  "Campanula-type" = "forb",
+  "Caryophyllaceae undiff." = "forb",
+  "Centaurea-type" = "forb",
+  "Cerastium cerastioides-type" = "forb",
+  "Chenopodiaceae" = "forb",
+  "Compositae (Cichorioideae)" = "forb",
+  "Compositae" = "forb",
+  "Drosera" = "forb",
+  "Epilobium" = "forb",
+  "Filipendula" = "forb",
+  "Geranium sylvaticum-type" = "forb",
+  "Melampyrum" = "forb",
+  "Oxyria digyna" = "forb",
+  "Plantago lanceolata" = "forb",
+  "Polygonum vivipara" = "forb",
+  "Potentilla-type" = "forb",
+  "Ranunculus acris-type" = "forb",
+  "Rosaceae undiff." = "forb",
+  "Rubiaceae" = "forb",
+  "Rumex acetosa-type" = "forb",
+  "Rumex undiff" = "forb",
+  "Saussurea" = "forb",
+  "Solidago-type" = "forb",
+  "Thalictrum" = "forb",
+  "Trientalis europea" = "forb",
+  "Trifolium" = "forb",
+  "Trollius" = "forb",
+  "Urtica" = "forb",
+  "Valeriana-type" = "forb",
+  
+  # Spores and mosses
+  "Cryptogramma crispa" = "spore",
+  "Dryopteris filix-mas" = "spore",
+  "Gymnocarpium dryopteris" = "spore",
+  "Huperzia selago" = "spore",
+  "Lycopodium annotinum" = "spore",
+  "Lycopodium clavatum" = "spore",
+  "Lycopodium undiff." = "spore",
+  "Botrychium-type" = "spore",
+  "Polypodium vulgare" = "spore",
+  "Selaginella selaginoides" = "spore",
+  "Thelypteris" = "spore",
+  "Thelypteris phegopteris" = "spore",
+  "Dryopteris-type" = "spore",
+  "Sphagnum" = "spore"
+)
+
+# Group and order taxa
+group_levels <- c("tree", "shrub", "dwarf_shrub", "graminoid", "forb", "spore")
+
+group_vec_spore <- taxon_groups[colnames(pollen_spore_percentage_subset)]
+group_vec_spore[is.na(group_vec_spore)] <- "other"
+
+group_order_spore <- order(factor(group_vec_spore, levels = group_levels),
+  colnames(pollen_spore_percentage_subset))
+
+pollen_spore_percentage_subset <- pollen_spore_percentage_subset[, group_order_spore, drop = FALSE]
+
+group_vec_spore <- group_vec_spore[group_order_spore]
+exaggerate_spore <- exaggerate_spore[group_order_spore]
+
+group_colours <- c(
+  tree = "#004D40",
+  shrub = "#598DBB",
+  graminoid = "goldenrod2",
+  forb = "#D81B4C",
+  spore = "#5E9E21",
+  dwarf_shrub = "#9900FF")
+
+curve_colours_spore <- unname(group_colours[group_vec_spore])
+
+#  all variables to pollen sample order
+sample_ids <- rownames(pollen_spore_percentage)
+
+div_spore <- data.frame(
+  N0_rarefied = as.numeric(N0_spore_rarefied[sample_ids]),
+  PCA1 = pca_diagram_scores[sample_ids, "PCA1"],
+  PCA2 = pca_diagram_scores[sample_ids, "PCA2"],
+  "LOI (%)" = as.numeric(LOI_spore_plot[sample_ids]),
+  "Charcoal (adjusted)" = as.numeric(charcoal_spore_plot[sample_ids]),
+  row.names = sample_ids,
+  check.names = FALSE
+)
+
+# Modelled ages for the pollen diagram
+age_diagram_spore <- unname(median_age_by_sample[sample_ids])
+```
+
+```{r}
+# Keep taxa reaching at least 2% in one or more samples
+# This filter applies only to the pollen diagram, not the PCA or DCA
+pollen_spore_percentage_subset <- pollen_spore_percentage[
+  , colSums(pollen_spore_percentage >= 2, na.rm = TRUE) > 0,
+  drop = FALSE
+]
+
+# Exaggerate taxa with a mean percentage below 5%
+exaggerate_spore <- colMeans(
+  pollen_spore_percentage_subset,
+  na.rm = TRUE
+) < 5
+
+# Assign pollen and spore taxa to functional groups
+taxon_groups <- c(
+  # Trees
+  "Alnus" = "tree",
+  "Betula" = "tree",
+  "Corylus" = "tree",
+  "Fraxinus" = "tree",
+  "Juglans" = "tree",
+  "Picea" = "tree",
+  "Pinus sylvestris" = "tree",
+  "Quercus" = "tree",
+  "Sorbus-type" = "tree",
+  "Tilia cordata" = "tree",
+  "Ulmus" = "tree",
+  
+  # Shrubs
+  "Juniperus communis" = "shrub",
+  "Salix undiff." = "shrub",
+  
+  # Dwarf shrubs
+  "Calluna vulgaris" = "dwarf_shrub",
+  "Empetrum nigrum" = "dwarf_shrub",
+  "Vaccinium-type" = "dwarf_shrub",
+  "Rubus chamaemorus" = "dwarf_shrub",
+  
+  # Grasses and sedges
+  "Cyperaceae undiff." = "graminoid",
+  "Poaceae" = "graminoid",
+  
+  # Herbs and forbs
+  "Apiaceae undiff." = "forb",
+  "Artemisia" = "forb",
+  "Brassicaceae" = "forb",
+  "Caltha-type" = "forb",
+  "Campanula-type" = "forb",
+  "Caryophyllaceae undiff." = "forb",
+  "Centaurea-type" = "forb",
+  "Cerastium cerastioides-type" = "forb",
+  "Chenopodiaceae" = "forb",
+  "Compositae (Cichorioideae)" = "forb",
+  "Compositae" = "forb",
+  "Drosera" = "forb",
+  "Epilobium" = "forb",
+  "Filipendula" = "forb",
+  "Geranium sylvaticum-type" = "forb",
+  "Melampyrum" = "forb",
+  "Oxyria digyna" = "forb",
+  "Plantago lanceolata" = "forb",
+  "Polygonum vivipara" = "forb",
+  "Potentilla-type" = "forb",
+  "Ranunculus acris-type" = "forb",
+  "Rosaceae undiff." = "forb",
+  "Rubiaceae" = "forb",
+  "Rumex acetosa-type" = "forb",
+  "Rumex undiff" = "forb",
+  "Saussurea" = "forb",
+  "Solidago-type" = "forb",
+  "Thalictrum" = "forb",
+  "Trientalis europea" = "forb",
+  "Trifolium" = "forb",
+  "Trollius" = "forb",
+  "Urtica" = "forb",
+  
+  # Spores and mosses
+  "Cryptogramma crispa" = "spore",
+  "Dryopteris filix-mas" = "spore",
+  "Gymnocarpium dryopteris" = "spore",
+  "Huperzia selago" = "spore",
+  "Lycopodium annotinum" = "spore",
+  "Lycopodium clavatum" = "spore",
+  "Lycopodium undiff." = "spore",
+  "Botrychium-type" = "spore",
+  "Polypodium vulgare" = "spore",
+  "Selaginella selaginoides" = "spore",
+  "Thelypteris" = "spore",
+  "Thelypteris phegopteris" = "spore",
+  "Dryopteris-type" = "spore",
+  "Sphagnum" = "spore"
+)
+
+# Set the order of functional groups in the pollen diagram
+group_levels <- c(
+  "tree", "shrub", "dwarf_shrub", "graminoid", "forb", "spore", "other"
+)
+
+# Match each displayed taxon to its functional group
+group_vec_spore <- taxon_groups[
+  colnames(pollen_spore_percentage_subset)
+]
+
+# Assign unclassified taxa to an 'other' group
+group_vec_spore[is.na(group_vec_spore)] <- "other"
+
+# Order taxa first by functional group, then alphabetically
+group_order_spore <- order(
+  factor(group_vec_spore, levels = group_levels),
+  colnames(pollen_spore_percentage_subset)
+)
+
+# Apply the same taxon order to percentages, groups and exaggeration
+pollen_spore_percentage_subset <- pollen_spore_percentage_subset[
+  , group_order_spore, drop = FALSE
+]
+
+group_vec_spore <- group_vec_spore[group_order_spore]
+exaggerate_spore <- exaggerate_spore[group_order_spore]
+
+# Colours for each functional group
+group_colours <- c(
+  tree = "#004D40",
+  shrub = "#598DBB",
+  dwarf_shrub = "#9900FF",
+  graminoid = "goldenrod2",
+  forb = "#D81B4C",
+  spore = "#5E9E21",
+  other = "grey40"
+)
+curve_colours_spore <- unname(group_colours[group_vec_spore])
+
+# Match all supplementary variables to pollen sample order
+sample_ids <- rownames(pollen_spore_percentage)
+
+div_spore <- data.frame(
+  N0_rarefied = as.numeric(N0_spore_rarefied[sample_ids]),
+  PCA1 = pca_diagram_scores[sample_ids, "PCA1"],
+  PCA2 = pca_diagram_scores[sample_ids, "PCA2"],
+  "LOI (%)" = as.numeric(LOI_spore_plot[sample_ids]),
+  "Charcoal (adjusted)" = as.numeric(charcoal_spore_plot[sample_ids]),
+  row.names = sample_ids,
+  check.names = FALSE
+)
+
+# Match modelled median ages to the pollen diagram samples
+age_diagram_spore <- age_depth_table$median_cal_yr_BP[
+  match(sample_ids, age_depth_table$sample)]
+```
+
+## Depth axis aligned to modelled ages
+
+```{r}
+# Match sediment depth midpoints to the pollen diagram sample order
+depth_diagram_spore <- as.numeric(
+  depth_midpoint_spore[rownames(pollen_spore_percentage_subset)])
+
+# Combine sediment depths and modelled ages for the diagram
+age_depth_spore <- data.frame(depth = depth_diagram_spore,age = age_diagram_spore)
+```
+
+## Diagram printed — pollen sum and vegetation zones
+
+The broken-stick assessment supports two main CONISS groups, with the main boundary near 8 cm. The lower interval is subdivided descriptively at 14 cm into TRET1A and TRET1B.
+
+```{r}
+#| fig-width: 16
+#| fig-height: 7
+# Main pollen and spore sum for each sample
+sum_grains_diagram <- as.numeric(pollen_spore_sums[sample_ids])
+
+# Vegetation zone boundaries (cm) and labels
+zone_boundaries_cm <- c(8, 14)
+zone_names <- c("TRET2", "TRET1B", "TRET1A")
+
+# Figure layout
+pollen_panel_limits <- c(0.12, 0.61)
+diversity_panel_limits <- c(0.62, 0.85)
+panel_y_limits <- c(0.06, 0.82)
+
+# Colours for diversity and environmental curves
+div_colours <- c(
+  "grey35",      # Rarefied richness (N0)
+  "firebrick4",  # PCA1
+  "firebrick4",  # PCA2
+  "grey35",      # LOI
+  "black"        # Adjusted charcoal
+)
+
+# Convert zone boundaries from depth (cm) to modelled age
+boundary_ages <- approx(
+  x = depth_diagram_spore,
+  y = age_diagram_spore,
+  xout = zone_boundaries_cm
+)$y
+
+# SECONDARY DEPTH AXIS
+secondary.scale <- function() {
+  
+  oldpar <- par(no.readonly = TRUE)
+  on.exit(par(oldpar))
+  
+  par(fig = c(0, 1, 0, 1),mar = c(0, 0, 0, 0),new = TRUE,xpd = NA)
+  
+  plot.new()
+  plot.window(xlim = c(0, 1),ylim = c(0, 1),xaxs = "i",yaxs = "i")
+  
+# Convert modelled ages to vertical figure positions
+age_to_y <- function(age) {
+  panel_y_limits[2] -
+    (age - min(age_diagram_spore)) /
+    diff(range(age_diagram_spore)) *
+    diff(panel_y_limits)
+  }
+  
+  y <- age_to_y(age_diagram_spore)
+  x_left <- 0.080
+  
+segments(x_left, min(y),x_left, max(y),col = "grey35")#Draw the depth axis
+segments(x_left - 0.004, y,x_left, y,col = "grey35")#Draw depth tick marks
+  
+text(x_left - 0.007,y,labels = sprintf("%.1f", depth_diagram_spore),adj = 1,
+    cex = 0.62)#Label each sample depth
+text(x_left - 0.030,mean(range(y)),"Depth (cm)",srt = 90,cex = 0.8)}#Label the depth axis
+
+# POLLEN SUM AND VEGETATION ZONES
+add_pollen_sum_and_zones <- function() {
+  oldpar <- par(no.readonly = TRUE)
+  on.exit(par(oldpar))
+   par(
+    fig = c(0, 1, 0, 1),
+    mar = c(0, 0, 0, 0),
+    new = TRUE,
+    xpd = NA)
+  
+  plot.new()
+  plot.window(
+    xlim = c(0, 1),
+    ylim = c(0, 1),
+    xaxs = "i",
+    yaxs = "i" )
+  
+  # Convert ages to vertical figure positions
+  age_to_y <- function(age) {
+    panel_y_limits[2] -
+      (age - min(age_diagram_spore)) /
+      diff(range(age_diagram_spore)) *
+      diff(panel_y_limits)}
+  
+  # Positions of the grain-count and zone columns
+  grain_left <- 0.863
+  grain_right <- 0.900
+  grain_centre <- 0.882
+  zone_centre <- 0.920
+  
+  # Draw grain-count column boundaries
+  segments(
+    c(grain_left, grain_right),
+    panel_y_limits[1],
+    c(grain_left, grain_right),
+    panel_y_limits[2],
+    col = "grey65")
+  
+  # Column headings
+  text(grain_centre, 0.855, "Main sum grains", cex = 0.55)
+  text(zone_centre, 0.855, "Zone", cex = 0.65)
+  
+  # Show the main pollen and spore sum for each sample
+  text(
+    grain_centre,
+    age_to_y(age_diagram_spore),
+    labels = sum_grains_diagram,
+    cex = 0.56)
+  
+  # Draw vegetation zone boundaries
+  boundary_y <- age_to_y(boundary_ages)
+  
+  segments(
+    0.12, boundary_y,
+    0.955, boundary_y,
+    col = "grey40",
+    lty = 2,
+    lwd = 1.2)
+  
+  # Position zone labels between boundaries
+  zone_edges <- c(
+    panel_y_limits[2],
+    boundary_y,
+    panel_y_limits[1])
+  
+  zone_centres <- (
+    zone_edges[-1] +
+      zone_edges[-length(zone_edges)]) / 2
+  
+  text(
+    zone_centre,
+    zone_centres,
+    zone_names,
+    cex = 0.83)}
+
+# MAIN POLLEN DIAGRAM
+make_pollen_diagram <- function() {
+ 
+# Plot pollen and spore percentages
+  pollen_spore_diagram <- strat.plot(
+    pollen_spore_percentage_subset,
+    yvar = age_diagram_spore,
+    y.rev = TRUE,
+    y.tks = sort(unique(c(
+      floor(min(age_diagram_spore)),
+      seq(0, 600, 100),
+      ceiling(max(age_diagram_spore))
+    ))),
+    plot.poly = TRUE,
+    col.poly = curve_colours_spore,
+    scale.percent = TRUE,
+    las = 2,
+    exag = exaggerate_spore,
+    col.exag = "grey55",
+    exag.alpha = 0.45,
+    exag.mult = 5,
+    srt.xlabel = 45,
+    cex.xlabel = 0.70,
+    ylabel = "Age (cal yr BP)",
+    ylabPos = 2.25,
+    xLeft = pollen_panel_limits[1],
+    xRight = pollen_panel_limits[2],
+    yBottom = panel_y_limits[1],
+    yTop = panel_y_limits[2],
+    wa.order = "none",
+    title = "")
+  
+  # Plot rarefied richness, PCA, LOI, charcoal and CONISS
+  diversity_spore_diagram <- strat.plot(
+    div_spore,
+    yvar = age_diagram_spore,
+    y.rev = TRUE,
+    y.axis = FALSE,
+    plot.line = TRUE,
+    plot.poly = FALSE,
+    plot.bar = FALSE,
+    col.line = div_colours,
+    lwd.line = 2,
+    xLeft = diversity_panel_limits[1],
+    xRight = diversity_panel_limits[2],
+    yBottom = panel_y_limits[1],
+    yTop = panel_y_limits[2],
+    srt.xlabel = 45,
+    cex.xlabel = 0.75,
+    add = TRUE,
+    clust = coniss_model,
+    clust.width = 0.06)
+  
+  add_pollen_sum_and_zones()# Add pollen sum and vegetation zones
+  secondary.scale()  # Add the sediment depth axis
+  
+  invisible(list(pollen = pollen_spore_diagram,diversity = diversity_spore_diagram))}
+make_pollen_diagram()#Display
+```
+
+```{r}
+png(filename = "Bilde_percentage_diagram.png",
+  width = 7000, height = 3000, res = 300, units = "px", bg = "white")
+make_pollen_diagram()
+dev.off()
+```
+
+## Rare taxa table
+```{r}
+# Identify taxa that did not reach 2% in any sample
+# These taxa are omitted from the pollen diagram but remain in the analyses
+rare_taxa <- setdiff(
+  colnames(pollen_spore_percentage),
+  colnames(pollen_spore_percentage_subset))
+
+# Create a table with sample depths, ages and percentages of omitted taxa
+rare_taxa_table <- data.frame(
+  "Depth (cm)" = depth_diagram_spore,
+  "Age (cal yr BP)" = age_diagram_spore,
+  pollen_spore_percentage[, rare_taxa, drop = FALSE],
+  check.names = FALSE)
+
+# Arrange samples from shallowest to deepest
+rare_taxa_table <- rare_taxa_table[
+  order(rare_taxa_table[["Depth (cm)"]]),,drop = FALSE]
+
+# Round taxon percentages to three decimal places
+rare_taxa_table[, rare_taxa] <- round(
+  rare_taxa_table[, rare_taxa, drop = FALSE],3)
+
+# Export the table to Excel
+write_xlsx(rare_taxa_table,"TRET25_rare_taxa_table.xlsx")
+```
+```{r}
+
+#| label: fig-terrestrial-pollen-groups
+#| fig-width: 11
+#| fig-height: 7
+
+# Combine the existing functional groups into four vegetation groups
+group_class <- taxon_groups
+group_class[group_class == "tree"] <- "Trees"
+group_class[group_class == "shrub"] <- "Shrubs"
+group_class[group_class == "dwarf_shrub"] <- "Dwarf shrubs"
+group_class[group_class %in% c("graminoid", "forb")] <- "Herbs"
+
+# Set the order of vegetation groups in the figure
+groups <- c("Herbs", "Dwarf shrubs", "Shrubs", "Trees")
+
+# Select terrestrial pollen taxa from the main pollen and spore counts
+pollen_taxa <- intersect(
+  names(group_class)[group_class %in% groups],
+  colnames(main_pollen_spore_counts))
+counts <- main_pollen_spore_counts[, pollen_taxa, drop = FALSE]
+
+# Sum the counts belonging to each vegetation group
+group_counts <- sapply(groups, \(g) {
+  rowSums(counts[, group_class[pollen_taxa] == g, drop = FALSE])})
+
+# Express each vegetation group as a percentage of classified terrestrial pollen
+group_percent <- 100 * group_counts / rowSums(group_counts)
+
+# Match sample depths and modelled ages to the vegetation-group data
+sample_info <- data.frame(
+  Sample = rownames(group_percent),
+  Depth = as.numeric(depth_midpoint_spore[rownames(group_percent)]),
+  Age = age_depth_table$median_cal_yr_BP[
+    match(rownames(group_percent), age_depth_table$sample)])
+
+# Prepare vegetation-group percentages for the stacked diagram
+summary_long <- as.data.frame(group_percent) |>
+  mutate(Sample = rownames(group_percent)) |>
+  pivot_longer(
+    cols = all_of(groups),
+    names_to = "Group",
+    values_to = "Percent"
+  ) |>
+  left_join(sample_info, by = "Sample") |>
+  mutate(Group = factor(Group, levels = groups)) |>
+  arrange(Depth, Group) |>
+  group_by(Depth) |>
+  mutate(
+    xmax = cumsum(Percent),
+    xmin = xmax - Percent
+  ) |>
+  ungroup()
+
+# Calculate label positions between vegetation-zone boundaries
+zone_edges_cm <- c(
+  min(sample_info$Depth),
+  zone_boundaries_cm,
+  max(sample_info$Depth))
+
+zone_labels <- data.frame(
+  Zone = zone_names,
+  Depth = (
+    zone_edges_cm[-1] +
+      zone_edges_cm[-length(zone_edges_cm)] ) / 2)
+
+# Plot
+vegetation_group_figure <- ggplot(
+  summary_long,aes(x = Depth,ymin = xmin,ymax = xmax,fill = Group,group = Group)) +
+  geom_ribbon(colour = NA) +
+  geom_vline(
+    xintercept = zone_boundaries_cm,# Mark vegetation-zone boundaries
+    linetype = "dashed",
+    colour = "grey40",
+    linewidth = 0.4) +
+  geom_text(
+    data = sample_info, # Add sample depth labels
+    aes(x = Depth, y = -12, label = Depth),
+    inherit.aes = FALSE,
+    size = 2.8) +
+geom_text(
+    data = sample_info,  # Add modelled sample ages
+    aes(x = Depth, y = -5, label = round(Age)),
+    inherit.aes = FALSE,
+    size = 2.8) +
+  geom_text(
+    data = zone_labels, # Add vegetation-zone names
+    aes(x = Depth, y = 104, label = Zone),
+    inherit.aes = FALSE,
+    fontface = "bold",
+    size = 3) +
+   geom_hline(yintercept = c(-8.5, -1), linewidth = 0.4) + # Separate the age and depth label columns
+  
+  # Display depth vertically, increasing downwards
+  coord_flip(clip = "off") +
+  scale_x_reverse(
+    limits = c(max(sample_info$Depth), min(sample_info$Depth)),
+    expand = expansion(mult = 0)) +
+  scale_y_continuous(
+    limits = c(-15, 110),
+    breaks = seq(0, 100, 20),
+    expand = expansion(mult = 0)) +
+  
+  # Colours for the four vegetation groups
+  scale_fill_manual(values = c("Herbs" = "#C38CF5","Dwarf shrubs" = "#3100B0","Shrubs" = "#598FBD","Trees" = "#005544"
+  )) +
+  
+  labs(x = NULL,y = "Terrestrial pollen group (%)") +
+  theme_classic(base_size = 11) +
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.line = element_blank(),
+    legend.position = "bottom",
+    legend.title = element_blank())
+
+print(vegetation_group_figure)
+```
+
+Pollen influx diagram
+
+Influx/PAR is an absolute measure. The percentage denominators used for the pollen diagram are therefore NOT used here.. Dryopteris-type is calculated like any other taxon. Sphagnum is kept separate from the main pollen + spore influx diagram for consistency with the percentage diagram.
+
+```{r}
+# Exclude marker spores, unknown counts and Sphagnum from the influx dataset
+excluded_from_influx <- c("Lycopodium counted","Unknown","Sphagnum")
+
+# Use raw pollen and spore counts, including Dryopteris-type
+influx_counts_all <- all_counts[
+  , !colnames(all_counts) %in% excluded_from_influx,
+  drop = FALSE
+]
+
+# Select the taxa displayed in the main percentage diagram
+influx_taxa <- intersect(colnames(pollen_spore_percentage_subset),
+  colnames(influx_counts_all))
+
+# Keep raw counts for the individually displayed taxa
+influx_counts <- influx_counts_all[, influx_taxa,drop = FALSE]
+
+# Calculate total counts across all retained pollen and spore taxa
+total_pollen_spore_counts <- rowSums(influx_counts_all)
+
+```
+
+## calculate spore + pollen influx
+
+```{r}
+
+# Lycopodium tablet information and sediment volume
+lycopodium_per_tablet <- 18584
+
+tablets_added <- setNames(as.numeric(unlist(my_count[4, -1])),sample_names)
+sediment_volume <- setNames(as.numeric(unlist(my_count[5, -1])),sample_names)
+lycopodium_counted <- setNames(as.numeric(unlist(my_count[6, -1])),sample_names)
+
+# Arrange samples from shallowest to deepest
+samples <- rownames(influx_counts_all)
+samples <- samples[order(depth_midpoint_spore[samples])]
+depth_influx <- depth_midpoint_spore[samples]
+
+# Match modelled median ages to the ordered samples
+age_influx <- age_depth_table$median_cal_yr_BP[match(samples, age_depth_table$sample)]
+names(age_influx) <- samples
+
+# Calculate sediment accumulation rate between adjacent samples (cm/year)
+interval_sar <- diff(depth_influx) / diff(age_influx)
+
+# Assign a sediment accumulation rate to each sample
+# Interior samples receive the mean of the adjacent interval rates
+sar_cm_yr <- c(
+  interval_sar[1],
+  (head(interval_sar, -1) + tail(interval_sar, -1)) / 2,
+  tail(interval_sar, 1)
+)
+
+names(sar_cm_yr) <- samples
+
+# Calculate the Lycopodium-based concentration correction
+concentration_factor <- (
+  tablets_added[samples] * lycopodium_per_tablet
+) / (
+  lycopodium_counted[samples] * sediment_volume[samples]
+)
+
+# Calculate individual taxon concentrations (grains/cm³)
+taxon_concentration <- sweep(
+  as.matrix(influx_counts[samples, , drop = FALSE]),
+  1,
+  concentration_factor,
+  "*"
+)
+
+# Calculate individual taxon influx (grains/cm²/year)
+taxon_influx <- sweep(
+  taxon_concentration,
+  1,
+  sar_cm_yr,
+  "*"
+)
+
+# Calculate total pollen and spore influx
+total_pollen_spore_influx <- (
+  total_pollen_spore_counts[samples] *
+    concentration_factor *
+    sar_cm_yr
+)
+
+# Summarise the influx calculations for each sample
+influx_summary <- data.frame(
+  Sample = samples,
+  Depth_cm = as.numeric(depth_influx),
+  Age_cal_BP = as.numeric(age_influx),
+  SAR_cm_yr = as.numeric(sar_cm_yr),
+  Total_influx = as.numeric(total_pollen_spore_influx)
+)
+
+print(influx_summary)
+```
+
+```{r}
+# Add vegetation-zone boundaries and labels to the influx diagram
+add_influx_zones <- function() {
+  
+  oldpar <- par(no.readonly = TRUE)
+  on.exit(par(oldpar))
+  
+  # Create an overlay covering the full figure
+  par(
+    fig = c(0, 1, 0, 1),
+    mar = c(0, 0, 0, 0),
+    oma = c(0, 0, 0, 0),
+    new = TRUE,
+    xpd = NA
+  )
+  
+  plot.new()
+  plot.window(
+    xlim = c(0, 1),
+    ylim = c(0, 1),
+    xaxs = "i",
+    yaxs = "i"
+  )
+  
+  # Draw the divider before the zone column
+  segments(
+    0.90, panel_y_limits[1],
+    0.90, panel_y_limits[2],
+    col = "grey65"
+  )
+  
+  # Add the zone column heading
+  text(0.95, 0.855, "Zone", cex = 0.7)
+  
+  # Convert zone boundary ages to figure positions
+  boundary_y <- panel_y_limits[2] -
+    (boundary_ages - min(age_diagram_spore)) /
+    diff(range(age_diagram_spore)) *
+    diff(panel_y_limits)
+  
+  # Draw horizontal zone boundaries
+  segments(
+    0.12, boundary_y,
+    0.995, boundary_y,
+    col = "grey40",
+    lty = 2,
+    lwd = 1.2
+  )
+  
+  # Calculate the centre of each vegetation zone
+  zone_edges <- c(
+    panel_y_limits[2],
+    boundary_y,
+    panel_y_limits[1]
+  )
+  
+  zone_centres <- (
+    head(zone_edges, -1) +
+      tail(zone_edges, -1)
+  ) / 2
+  
+  # Add zone labels
+  text(
+    0.95,
+    zone_centres,
+    labels = zone_names,
+    cex = 0.83
+  )
+}
+```
+
+## Final influx diagram (PNG)
+
+Influx uses sediment accumulation rates calculated from the PLUM median ages
+
+```{r}
+
+#| label: fig-pollen-spore-influx
+#| fig-width: 25
+#| fig-height: 10
+
+# Use the same sample order as the percentage diagram
+plot_samples <- rownames(pollen_spore_percentage_subset)
+
+# Prepare individual taxon influx curves
+influx_plot <- as.data.frame(
+  taxon_influx[plot_samples, , drop = FALSE]
+)
+
+# Add total pollen and spore influx as the final column
+influx_plot$Total_influx <- as.numeric(
+  total_pollen_spore_influx[plot_samples]
+)
+
+# Use the same functional-group colours as the percentage diagram
+influx_colours <- c(curve_colours_spore, "black")
+
+# Create the influx diagram
+make_influx_diagram <- function() {
+  
+  # Plot individual taxon influx and total influx
+  strat.plot(
+    influx_plot,
+    yvar = age_diagram_spore,
+    y.rev = TRUE,
+    y.tks = sort(unique(c(
+      floor(min(age_diagram_spore)),
+      seq(0, 600, 100),
+      ceiling(max(age_diagram_spore))
+    ))),
+    plot.line = TRUE,
+    plot.poly = TRUE,
+    plot.bar = FALSE,
+    scale.percent = FALSE,
+    x.axis = TRUE,
+    col.line = influx_colours,
+    col.poly = influx_colours,
+    las = 2,
+    srt.xlabel = 45,
+    cex.xlabel = 0.65,
+    ylabel = "Age (cal yr BP)",
+    ylabPos = 2,
+    xLeft = 0.12,
+    xRight = 0.89,
+    yBottom = panel_y_limits[1],
+    yTop = panel_y_limits[2],
+    wa.order = "none",
+    title = ""
+  )
+  
+  # Add the same sediment depth axis as the percentage diagram
+  secondary.scale()
+  
+  # Add the vegetation-zone boundaries and labels
+  add_influx_zones()
+}
+
+# Display the influx diagram
+make_influx_diagram()
+```
+
+```{r}
+#| label: save-pollen-spore-influx
+#| include: false
+
+# Save the pollen and spore influx diagram as a 300 dpi PNG
+png(
+  filename = "pollen_spore_influx.png",
+  width = 25,
+  height = 10,
+  units = "in",
+  res = 300,
+  bg = "white"
+)
+
+make_influx_diagram()
+
+dev.off()
+```
+
+```{r}
+# Package versions
+packageVersion("rplum")
+packageVersion("readxl")
+packageVersion("dplyr")
+packageVersion("tidyr")
+packageVersion("ggplot2")
+packageVersion("ggrepel")
+packageVersion("vegan")
+packageVersion("rioja")
+packageVersion("iNEXT")
+```
