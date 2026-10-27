@@ -997,8 +997,6 @@ print(vegetation_group_figure)
 
 Pollen influx diagram
 
-Influx/PAR is an absolute measure. The percentage denominators used for the pollen diagram are therefore NOT used here.. Dryopteris-type is calculated like any other taxon. Sphagnum is kept separate from the main pollen + spore influx diagram for consistency with the percentage diagram.
-
 ```{r}
 # Exclude marker spores, unknown counts and Sphagnum from the influx dataset
 excluded_from_influx <- c("Lycopodium counted","Unknown","Sphagnum")
@@ -1168,8 +1166,6 @@ add_influx_zones <- function() {
 ```
 
 ## Final influx diagram (PNG)
-
-Influx uses sediment accumulation rates calculated from the PLUM median ages
 
 ```{r}
 
