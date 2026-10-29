@@ -1,0 +1,125 @@
+---
+title: "Final PLUM model"
+author: "Agnes Thunem"
+format: html
+editor: source
+execute:
+  warning: false
+  message: false
+---
+
+Selected chronology: ^210Pb samples ending at 4.5 cm, both fallout markers,
+and both radiocarbon dates. No explicit hiatus.
+
+```{r}
+library(rplum)
+library(rbacon)
+library(readxl)
+library(dplyr)
+library(knitr)
+
+coredir <- "Plum_runs"
+thick_cm <- 1
+sample_depths <- c(seq(0.5, 24.5, by = 1), 25.25)
+curve_depths <- seq(0.25, 25, by = 0.25)
+
+dat <- read_excel("TRET25_rplum_simple.xlsx", sheet = "input")
+
+pb_input <- dat |>
+  filter(Type == "Pb210") |>
+  arrange(Bottom_depth_cm) |>
+  transmute(labID = Sample, depth = Bottom_depth_cm,
+            density = Density_est_g_cm3,
+            Pb210 = Total_Pb210_Bq_kg, error = Total_Pb210_error,
+            thickness = Thickness_cm,
+            supported = Supported_Pb210_Bq_kg,
+            supported_error = Supported_Pb210_error)
+
+c14_input <- dat |>
+  filter(Type == "C14") |>
+  transmute(labID = Sample, age = C14_age_BP, error = C14_error,
+            depth = Mid_depth_cm, cc = 1)
+
+fallout_input <- dat |>
+  filter(grepl("^Fallout", Type)) |>
+  transmute(labID = Sample, age = C14_age_BP, error = C14_error,
+            depth = Mid_depth_cm, cc = 0)
+
+age_at <- function(d) {
+  ages <- Bacon.Age.d(d, set = info, BCAD = FALSE)
+  ages <- ages[is.finite(ages)]
+  data.frame(depth_cm = d,
+             median_cal_yr_BP = median(ages),
+             lower95_cal_yr_BP = unname(quantile(ages, 0.025)),
+             upper95_cal_yr_BP = unname(quantile(ages, 0.975)))
+}
+```
+
+## Fit final model
+
+```{r}
+#| fig-width: 11
+#| fig-height: 7
+core <- "Age model Trettetjørn"
+folder <- file.path(coredir, core)
+dir.create(folder, recursive = TRUE, showWarnings = FALSE)
+
+pb_final <- pb_input |> filter(depth <= 4.5)
+dates_final <- bind_rows(c14_input, fallout_input) |> arrange(depth)
+
+write.csv(pb_final, file.path(folder, paste0(core, ".csv")), row.names = FALSE)
+dates_file <- paste0(core, "_C14.csv")
+write.csv(dates_final, file.path(folder, dates_file), row.names = FALSE)
+
+# Open PNG
+png(
+  filename = "TRET25_PLUM_full_diagnostics.png",
+  width = 4200,
+  height = 2700,
+  res = 300
+)
+
+# Original PLUM output, including diagnostic plots
+Plum(
+  core = core,
+  coredir = coredir,
+  otherdates = dates_file,
+  date.sample = 2025,
+  ra.case = 2,
+  n.supp = 0,
+  Bqkg = TRUE,
+  cc1 = "IntCal20",
+  BCAD = FALSE,
+  thick = thick_cm,
+  acc.mean = 30,
+  d.min = 0,
+  d.max = 25.25,
+  d.by = 0.5,
+  remember = FALSE,
+  ask = FALSE,
+  suggest = FALSE,
+  plot.pdf = FALSE
+)
+
+# Close and save PNG
+dev.off()
+
+```
+# main model cleaner
+```{r}
+#| label: fig-plum-focused
+
+png("TRET25_PLUM_focused.png",
+    width = 4200, height = 2700, res = 300)
+
+agedepth(
+  set = info,
+  age.min = -100,
+  age.max = 700,
+  plot.pb = TRUE,
+  plot.pdf = FALSE
+)
+
+dev.off()
+```
+
