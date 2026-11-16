@@ -1,0 +1,174 @@
+---
+title: "Final PLUM model"
+author: "Agnes Thunem"
+format: html
+editor: source
+execute:
+  warning: false
+  message: false
+---
+
+Selected chronology: ^210Pb samples ending at 4.5 cm, both fallout markers,
+and both radiocarbon dates. No explicit hiatus.
+
+## Data and settings
+
+```{r}
+library(rplum)
+library(rbacon)
+library(readxl)
+library(dplyr)
+library(knitr)
+
+coredir <- "Plum_runs"
+thick_cm <- 1
+sample_depths <- c(seq(0.5, 24.5, by = 1), 25.25)
+curve_depths <- seq(0.25, 25, by = 0.25)
+
+dat <- read_excel("TRET25_rplum_simple.xlsx", sheet = "input")
+
+pb_input <- dat |>
+  filter(Type == "Pb210") |>
+  arrange(Bottom_depth_cm) |>
+  transmute(labID = Sample, depth = Bottom_depth_cm,
+            density = Density_est_g_cm3,
+            Pb210 = Total_Pb210_Bq_kg, error = Total_Pb210_error,
+            thickness = Thickness_cm,
+            supported = Supported_Pb210_Bq_kg,
+            supported_error = Supported_Pb210_error)
+
+c14_input <- dat |>
+  filter(Type == "C14") |>
+  transmute(labID = Sample, age = C14_age_BP, error = C14_error,
+            depth = Mid_depth_cm, cc = 1)
+
+fallout_input <- dat |>
+  filter(grepl("^Fallout", Type)) |>
+  transmute(labID = Sample, age = C14_age_BP, error = C14_error,
+            depth = Mid_depth_cm, cc = 0)
+
+age_at <- function(d) {
+  ages <- Bacon.Age.d(d, set = info, BCAD = FALSE)
+  ages <- ages[is.finite(ages)]
+  data.frame(depth_cm = d,
+             median_cal_yr_BP = median(ages),
+             lower95_cal_yr_BP = unname(quantile(ages, 0.025)),
+             upper95_cal_yr_BP = unname(quantile(ages, 0.975)))
+}
+```
+
+## Fit final model
+
+```{r}
+#| fig-width: 11
+#| fig-height: 7
+core <- "Age model Trettetjørn"
+folder <- file.path(coredir, core)
+dir.create(folder, recursive = TRUE, showWarnings = FALSE)
+
+pb_final <- pb_input |> filter(depth <= 4.5)
+dates_final <- bind_rows(c14_input, fallout_input) |> arrange(depth)
+
+write.csv(pb_final, file.path(folder, paste0(core, ".csv")), row.names = FALSE)
+dates_file <- paste0(core, "_C14.csv")
+write.csv(dates_final, file.path(folder, dates_file), row.names = FALSE)
+
+# Open high-resolution PNG device
+png(
+  filename = "TRET25_PLUM_full_diagnostics.png",
+  width = 4200,
+  height = 2700,
+  res = 300
+)
+
+# Original PLUM output, including diagnostic plots
+Plum(
+  core = core,
+  coredir = coredir,
+  otherdates = dates_file,
+  date.sample = 2025,
+  ra.case = 2,
+  n.supp = 0,
+  Bqkg = TRUE,
+  cc1 = "IntCal20",
+  BCAD = FALSE,
+  thick = thick_cm,
+  acc.mean = 30,
+  d.min = 0,
+  d.max = 25.25,
+  d.by = 0.5,
+  remember = FALSE,
+  ask = FALSE,
+  suggest = FALSE,
+  plot.pdf = FALSE
+)
+
+# Close and save PNG
+dev.off()
+
+```
+```{r}
+#| label: fig-plum-focused
+
+png("TRET25_PLUM_focused.png",
+    width = 4200, height = 2700, res = 300)
+
+agedepth(
+  set = info,
+  age.min = -100,
+  age.max = 700,
+  plot.pb = TRUE,
+  plot.pdf = FALSE
+)
+
+dev.off()
+```
+```{r}
+agedepth(
+  set = info,
+  age.min = -100,
+  age.max = 700,
+  pb.lim = c(0, 600),
+  plot.pb = TRUE,
+  plot.pdf = FALSE
+)
+```
+```{r}
+library(rintcal)
+cc <- ccurve(1)          # IntCal20: cal BP, 14C BP, error
+yrs <- seq(min(cc[,1]), max(cc[,1]), by = 1)
+mu  <- approx(cc[,1], cc[,2], yrs)$y
+sig <- approx(cc[,1], cc[,3], yrs)$y
+
+cal_one <- function(age, error, labID) {
+  p  <- dnorm(age, mu, sqrt(error^2 + sig^2))
+  cp <- cumsum(p) / sum(p)
+  q  <- function(x) yrs[which(cp >= x)[1]]
+  data.frame(labID, C14_age_BP = age, C14_error = error,
+             median_cal_BP = q(0.5),
+             lower95_cal_BP = q(0.025),
+             upper95_cal_BP = q(0.975))
+}
+
+c14_cal <- do.call(rbind, Map(cal_one, c14_input$age, c14_input$error, c14_input$labID))
+kable(c14_cal, digits = 0)
+```
+```{r}
+#| label: acc-rates
+acc_at <- function(d) {
+  a <- accrate.depth(d, set = info)
+  a <- a[is.finite(a)]
+  if (length(a) == 0) return(data.frame(depth_cm = d, median_yr_cm = NA, lower95 = NA, upper95 = NA))
+  data.frame(depth_cm = d,
+             median_yr_cm = median(a),
+             lower95 = unname(quantile(a, 0.025)),
+             upper95 = unname(quantile(a, 0.975)))
+}
+acc_tab <- do.call(rbind, lapply(sample_depths, acc_at))
+kable(acc_tab, digits = 1)
+
+# Plot of accumulation rate against depth (grey = uncertainty)
+accrate.depth.ghost(set = info)
+```
+
+

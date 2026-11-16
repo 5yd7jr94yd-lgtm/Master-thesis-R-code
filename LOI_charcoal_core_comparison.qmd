@@ -1,0 +1,276 @@
+---
+title: "Trettetjørn: comparison with Anne's core"
+format: html
+execute:
+  warning: false
+  message: false
+---
+
+
+```{r}
+#| label: comparison-data
+
+library(readxl)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# Anne's original pollen counts and modelled ages
+anne_raw <- read_excel("pollen counts trettetjorn Anne.xlsx", sheet = "Ark1")
+
+anne_non_sum_columns <- c(
+  "Depth, cm", "Age cal yr BP", "Dryopteris-type", "Sphagnum",
+  "Unknown", "Botryococcus", "Pediastrum", "Charcoal dust"
+)
+
+anne_counts <- anne_raw[
+  , !names(anne_raw) %in% anne_non_sum_columns, drop = FALSE
+]
+anne_counts[] <- lapply(anne_counts, as.numeric)
+anne_counts[is.na(anne_counts)] <- 0
+anne_main_sum <- rowSums(anne_counts)
+
+anne_compare <- data.frame(
+  depth_cm = as.numeric(anne_raw[["Depth, cm"]]),
+  age_cal_yr_BP = as.numeric(anne_raw[["Age cal yr BP"]]),
+  charcoal = as.numeric(anne_raw[["Charcoal dust"]]),
+  Juniperus = 100 * as.numeric(anne_raw[["Juniperus communis"]]) / anne_main_sum,
+  Pinus = 100 * as.numeric(anne_raw[["Pinus sylvestris"]]) / anne_main_sum
+) |>
+  filter(depth_cm <= 30)
+
+anne_loi <- read_excel("Glødetap_Anne.xlsx", sheet = "Sheet2") |>
+  transmute(
+    depth_cm = as.numeric(`Depth, cm`),
+    LOI = as.numeric(`LOI, %`)
+  ) |>
+  filter(is.finite(depth_cm), is.finite(LOI), depth_cm <= 30)
+
+# Interpolate Anne's ORIGINAL modelled ages for LOI measurements
+anne_loi <- anne_loi |>
+  mutate(
+    age_cal_yr_BP = approx(
+      x = anne_compare$depth_cm,
+      y = anne_compare$age_cal_yr_BP,
+      xout = depth_cm,
+      rule = 1
+    )$y
+  )
+```
+
+## TRET25 data
+
+```{r}
+#| label: tret-comparison-data
+
+my_count <- read_excel(
+  "my samples count done.xlsx",
+  sheet = "my count",
+  range = "A1:AA67",
+  col_names = FALSE
+)
+
+sample_names <- as.character(unlist(my_count[1, -1]))
+depth_midpoint_spore <- setNames(
+  as.numeric(unlist(my_count[3, -1])), sample_names
+)
+taxon_counts <- as.data.frame(my_count[7:67, -1])
+rownames(taxon_counts) <- as.character(unlist(my_count[7:67, 1]))
+colnames(taxon_counts) <- sample_names
+taxon_counts[] <- lapply(taxon_counts, as.numeric)
+taxon_counts[is.na(taxon_counts)] <- 0
+
+all_counts <- as.data.frame(t(taxon_counts))
+excluded_from_main_sum <- c(
+  "Dryopteris-type", "Sphagnum", "Lycopodium counted", "Unknown"
+)
+main_pollen_spore_counts <- all_counts[
+  , !names(all_counts) %in% excluded_from_main_sum, drop = FALSE
+]
+pollen_spore_sums <- rowSums(main_pollen_spore_counts)
+pollen_spore_percentage <- sweep(
+  main_pollen_spore_counts, 1, pollen_spore_sums, "/"
+) * 100
+
+pollen_ages <- read.csv("Plum_runs/pollen_sample_ages.csv")
+samples <- rownames(main_pollen_spore_counts)
+
+loi_raw <- read_excel("glødetap.xlsx", sheet = "Sheet1") |>
+  transmute(
+    beaker_nr = as.character(`beaker nr`),
+    dry_g = as.numeric(`beaker+dry`) - as.numeric(beaker),
+    ash_g = as.numeric(`beaker+burnt`) - as.numeric(beaker)
+  ) |>
+  mutate(LOI_percent = (dry_g - ash_g) / dry_g * 100)
+
+charcoal_raw <- read_excel("charcoal.xlsx", sheet = "Sheet1") |>
+  transmute(
+    sample = as.character(sample),
+    charcoal_3T = as.numeric(charcoal),
+    lycopodium_3T = as.numeric(lycopodium),
+    lycopodium_full = as.numeric(`pollen lycopodium`)
+  ) |>
+  mutate(
+    charcoal_adjusted = charcoal_3T * lycopodium_full / lycopodium_3T
+  )
+
+my_compare <- data.frame(
+  depth_cm = as.numeric(depth_midpoint_spore[samples]),
+  age_cal_yr_BP = pollen_ages$median_cal_yr_BP[
+    match(samples, as.character(pollen_ages$sample))
+  ],
+  LOI = loi_raw$LOI_percent[match(samples, loi_raw$beaker_nr)],
+  charcoal = charcoal_raw$charcoal_adjusted[
+    match(samples, charcoal_raw$sample)
+  ],
+  Juniperus = as.numeric(pollen_spore_percentage[["Juniperus communis"]]),
+  Pinus = as.numeric(pollen_spore_percentage[["Pinus sylvestris"]])
+)
+```
+
+## Compare the cores by modelled age
+
+```{r}
+#| label: fig-anne-comparison
+#| fig-width: 16
+#| fig-height: 9
+#| fig-cap: "Core-to-core proxy comparison using Anne's original modelled ages and TRET25 Plum median ages."
+
+anne_long <- bind_rows(
+  anne_loi |>
+    transmute(age_cal_yr_BP, panel = "Anne LOI", value = LOI),
+  anne_compare |>
+    transmute(age_cal_yr_BP, panel = "Anne charcoal", value = charcoal),
+  anne_compare |>
+    transmute(age_cal_yr_BP, panel = "Anne Juniperus", value = Juniperus),
+  anne_compare |>
+    transmute(age_cal_yr_BP, panel = "Anne Pinus", value = Pinus)
+)
+
+my_long <- my_compare |>
+  pivot_longer(
+    cols = c(LOI, charcoal, Juniperus, Pinus),
+    names_to = "proxy",
+    values_to = "value"
+  ) |>
+  mutate(panel = paste("My", proxy)) |>
+  select(age_cal_yr_BP, panel, value)
+
+comparison_age <- bind_rows(anne_long, my_long)
+
+comparison_age$panel <- factor(
+  comparison_age$panel,
+  levels = c(
+    "Anne LOI", "My LOI",
+    "Anne charcoal", "My charcoal",
+    "Anne Juniperus", "My Juniperus",
+    "Anne Pinus", "My Pinus"
+  )
+)
+
+# Shared horizontal ranges for comparable LOI and pollen percentage panels.
+# Charcoal uses separate ranges because the counting methods differ.
+loi_max <- max(anne_loi$LOI, my_compare$LOI, na.rm = TRUE)
+juniperus_max <- max(anne_compare$Juniperus, my_compare$Juniperus, na.rm = TRUE)
+pinus_max <- max(anne_compare$Pinus, my_compare$Pinus, na.rm = TRUE)
+anne_charcoal_max <- max(anne_compare$charcoal, na.rm = TRUE)
+my_charcoal_max <- max(my_compare$charcoal, na.rm = TRUE)
+
+panel_max <- c(
+  "Anne LOI" = loi_max, "My LOI" = loi_max,
+  "Anne charcoal" = anne_charcoal_max,
+  "My charcoal" = my_charcoal_max,
+  "Anne Juniperus" = juniperus_max, "My Juniperus" = juniperus_max,
+  "Anne Pinus" = pinus_max, "My Pinus" = pinus_max
+)
+
+scale_limits <- data.frame(
+  panel = rep(names(panel_max), each = 2),
+  value = as.numeric(c(rbind(rep(0, length(panel_max)), panel_max))),
+  age_cal_yr_BP = 0
+)
+scale_limits$panel <- factor(
+  scale_limits$panel, levels = levels(comparison_age$panel)
+)
+
+core_comparison_age_plot <- ggplot(
+  comparison_age,
+  aes(x = value, y = age_cal_yr_BP)
+) +
+  geom_blank(data = scale_limits) +
+  geom_line(orientation = "y", linewidth = 0.7, na.rm = TRUE) +
+  geom_point(size = 1.3, na.rm = TRUE) +
+  scale_y_reverse(name = "Age (cal yr BP)") +
+  facet_grid(cols = vars(panel), scales = "free_x") +
+  labs(
+    x = NULL,
+    title = "Trettetjørn core-to-core proxy comparison",
+    subtitle = "Anne: original modelled ages | TRET25: Plum median ages"
+  ) +
+  theme_bw(base_size = 10) +
+  theme(
+    panel.grid.minor = element_blank(),
+    strip.text.x = element_text(size = 9, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+print(core_comparison_age_plot)
+```
+
+## Focused LOI and charcoal comparison
+
+```{r}
+#| label: fig-loi-charcoal-comparison
+#| fig-width: 10
+#| fig-height: 7
+
+loi_charcoal_long <- bind_rows(
+  anne_loi |>
+    transmute(age_cal_yr_BP, panel = "Bjune LOI", value = LOI),
+  my_compare |>
+    transmute(age_cal_yr_BP, panel = "My LOI", value = LOI),
+  anne_compare |>
+    transmute(age_cal_yr_BP, panel = "Bjune charcoal", value = charcoal),
+  my_compare |>
+    transmute(age_cal_yr_BP, panel = "My charcoal", value = charcoal)
+) |>
+  mutate(panel = factor(panel, levels = c(
+    "Bjune LOI", "My LOI",
+    "Bjune charcoal", "My charcoal"
+  )))
+
+loi_max_focus <- max(anne_loi$LOI, my_compare$LOI, na.rm = TRUE)
+charcoal_max_bjune <- max(anne_compare$charcoal, na.rm = TRUE)
+charcoal_max_tret <- max(my_compare$charcoal, na.rm = TRUE)
+
+focus_panel_max <- c(
+  "Bjune LOI" = loi_max_focus,
+  "My LOI" = loi_max_focus,
+  "Bjune charcoal" = charcoal_max_bjune,
+  "My charcoal" = charcoal_max_tret
+)
+
+focus_limits <- data.frame(
+  panel = factor(rep(names(focus_panel_max), each = 2),
+                 levels = levels(loi_charcoal_long$panel)),
+  value = as.numeric(rbind(rep(0, length(focus_panel_max)), focus_panel_max)),
+  age_cal_yr_BP = 0
+)
+
+loi_charcoal_plot <- ggplot(loi_charcoal_long,
+                           aes(x = value, y = age_cal_yr_BP)) +
+  geom_blank(data = focus_limits) +
+  geom_line(orientation = "y", linewidth = 0.7, na.rm = TRUE) +
+  geom_point(size = 1.5, na.rm = TRUE) +
+  scale_y_reverse(name = "Age (cal yr BP)") +
+  facet_grid(cols = vars(panel), scales = "free_x") +
+  labs(x = NULL, title = "Trettetjørn: LOI and charcoal comparison",
+       subtitle = "Bjune: original modelled ages | My core: Plum median ages") +
+  theme_bw(base_size = 11) +
+  theme(panel.grid.minor = element_blank(),
+        strip.text.x = element_text(size = 9, face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(loi_charcoal_plot)
+```
