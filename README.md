@@ -1,7 +1,7 @@
 # Master-thesis-R-code
 This repository contains scripts used for age-depth modelling and figures presenting data from sediment cores from Trettetjørn, Norway.
 
-Contents:
+Contents
 
 A_final_plum_model.qmd (age model)
 
