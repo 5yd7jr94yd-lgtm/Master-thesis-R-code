@@ -965,12 +965,7 @@ sample_info <- data.frame(
     depth_midpoint_spore[rownames(group_percent)]
   ),
   Age = age_depth_table$median_cal_yr_BP[
-    match(
-      rownames(group_percent),
-      age_depth_table$sample
-    )
-  ]
-)
+    match(rownames(group_percent),age_depth_table$sample)])
 
 # Prepare percentages for the stacked diagram
 summary_long <- as.data.frame(group_percent) |>
@@ -991,19 +986,10 @@ summary_long <- as.data.frame(group_percent) |>
   ungroup()
 
 # Calculate vegetation-zone label positions
-zone_edges_cm <- c(
-  min(sample_info$Depth),
-  zone_boundaries_cm,
-  max(sample_info$Depth)
-)
-
+zone_edges_cm <- c(min(sample_info$Depth),zone_boundaries_cm,max(sample_info$Depth))
 zone_labels <- data.frame(
   Zone = zone_names,
-  Depth = (
-    head(zone_edges_cm, -1) +
-      tail(zone_edges_cm, -1)
-  ) / 2
-)
+  Depth = (head(zone_edges_cm, -1) +tail(zone_edges_cm, -1)) / 2)
 
 # Positions of depth, age and headings
 depth_col <- -12
@@ -1013,108 +999,40 @@ heading_depth <- min(sample_info$Depth) - 1.5
 # Plot
 vegetation_group_figure <- ggplot(
   summary_long,
-  aes(
-    x = Depth,
-    ymin = xmin,
-    ymax = xmax,
-    fill = Group,
-    group = Group
-  )
-) +
-  
-  # Stacked vegetation groups
-  geom_ribbon(colour = NA) +
-  
-  # Dashed zone boundaries ONLY across the pollen diagram
+  aes(x = Depth,ymin = xmin,ymax = xmax,fill = Group,group = Group)) +
+  geom_ribbon(colour = NA) + # Stacked vegetation groups
+  # Dashed zone boundaries across the pollen diagram
   geom_segment(
     data = data.frame(Depth = zone_boundaries_cm),
-    aes(
-      x = Depth,
-      xend = Depth,
-      y = 0,
-      yend = 110
-    ),
-    inherit.aes = FALSE,
+    aes(x = Depth,xend = Depth,y = 0,yend = 110),inherit.aes = FALSE,
     linetype = "dashed",
     colour = "grey5",
     linewidth = 0.4
   ) +
-  
   # Sample depths
-  geom_text(
-    data = sample_info,
-    aes(x = Depth, y = depth_col, label = Depth),
-    inherit.aes = FALSE,
-    size = 2.8
-  ) +
+  geom_text(data = sample_info,aes(x = Depth, y = depth_col, label = Depth),inherit.aes = FALSE,size = 2.8) +
   
   # Modelled median ages
-  geom_text(
-    data = sample_info,
-    aes(x = Depth, y = age_col, label = round(Age)),
-    inherit.aes = FALSE,
-    size = 2.8,
-    na.rm = TRUE
-  ) +
+  geom_text(data = sample_info,aes(x = Depth, y = age_col, label = round(Age)),inherit.aes = FALSE,size = 2.8,na.rm = TRUE) +
   
   # Vegetation-zone labels
-  geom_text(
-    data = zone_labels,
-    aes(x = Depth, y = 104, label = Zone),
-    inherit.aes = FALSE,
-    fontface = "bold",
-    size = 3
-  ) +
+  geom_text(data = zone_labels,aes(x = Depth, y = 104, label = Zone),inherit.aes = FALSE,fontface = "bold",size = 3) +
   
   # Black vertical lines between the number columns
   geom_segment(
     data = data.frame(y = c(-8.5, -1)),
-    aes(
-      x = min(sample_info$Depth),
-      xend = max(sample_info$Depth),
-      y = y,
-      yend = y
-    ),
+    aes(x = min(sample_info$Depth), xend = max(sample_info$Depth),y = y,yend = y),
     inherit.aes = FALSE,
-    linewidth = 0.4
-  ) +
-  
+    linewidth = 0.4) +
   # Depth heading
-  annotate(
-    "text",
-    x = heading_depth,
-    y = depth_col,
-    label = "Depth\n(cm)",
-    fontface = "bold",
-    size = 2.5
-  ) +
-  
+  annotate("text",x = heading_depth,y = depth_col,label = "Depth\n(cm)",fontface = "bold",size = 2.5) +
   # Age heading
-  annotate(
-    "text",
-    x = heading_depth,
-    y = age_col,
-    label = "Age\n(cal yr BP)",
-    fontface = "bold",
-    size = 2.5
-  ) +
+  annotate("text",x = heading_depth,y = age_col,label = "Age\n(cal yr BP)",fontface = "bold",size = 2.5) +
   
   # Axes
   coord_flip(clip = "off") +
-  
-  scale_x_reverse(
-    limits = c(
-      max(sample_info$Depth),
-      min(sample_info$Depth) - 2.5
-    ),
-    expand = expansion(mult = 0)
-  ) +
-  
-  scale_y_continuous(
-    limits = c(-15, 110),
-    breaks = seq(0, 100, 20),
-    expand = expansion(mult = 0)
-  ) +
+  scale_x_reverse(limits = c(max(sample_info$Depth),min(sample_info$Depth) - 2.5),expand = expansion(mult = 0)) +
+  scale_y_continuous(limits = c(-15, 110),breaks = seq(0, 100, 20),expand = expansion(mult = 0)) +
   
   # Original vegetation-group colours
   scale_fill_manual(
@@ -1122,29 +1040,17 @@ vegetation_group_figure <- ggplot(
       "Herbs" = "#C72D56",
       "Dwarf shrubs" = "#3100B0",
       "Shrubs" = "#6699FF",
-      "Trees" = "#006633"
-    )
+      "Trees" = "#006633")
   ) +
-  
-  labs(
-    x = NULL,
-    y = "Terrestrial pollen group (%)"
-  ) +
-  
+  labs(x = NULL,y = "Terrestrial pollen group (%)") +
   theme_classic(base_size = 11) +
-  
   theme(
     axis.text.y = element_blank(),
     axis.ticks.y = element_blank(),
     axis.line = element_blank(),
     legend.position = "bottom",
     legend.title = element_blank(),
-    plot.margin = margin(
-      t = 12,
-      r = 15,
-      b = 10,
-      l = 10
-    )
+    plot.margin = margin(t = 12,r = 15,b = 10,l = 10)
   )
 
 # Display figure
@@ -1168,10 +1074,7 @@ ggsave(
 excluded_from_influx <- c("Lycopodium counted","Unknown","Sphagnum")
 
 # Use raw pollen and spore counts, including Dryopteris-type
-influx_counts_all <- all_counts[
-  , !colnames(all_counts) %in% excluded_from_influx,
-  drop = FALSE
-]
+influx_counts_all <- all_counts[, !colnames(all_counts) %in% excluded_from_influx, drop = FALSE]
 
 # Select the taxa displayed in the main percentage diagram
 influx_taxa <- intersect(colnames(pollen_spore_percentage_subset),
@@ -1182,13 +1085,10 @@ influx_counts <- influx_counts_all[, influx_taxa,drop = FALSE]
 
 # Calculate total counts across all retained pollen and spore taxa
 total_pollen_spore_counts <- rowSums(influx_counts_all)
-
 ```
-
 ## calculate spore + pollen influx
 
 ```{r}
-
 # Lycopodium tablet information and sediment volume
 lycopodium_per_tablet <- 18584
 
@@ -1205,48 +1105,23 @@ depth_influx <- depth_midpoint_spore[samples]
 age_influx <- age_depth_table$median_cal_yr_BP[match(samples, age_depth_table$sample)]
 names(age_influx) <- samples
 
-# Calculate sediment accumulation rate between adjacent samples (cm/year)
-interval_sar <- diff(depth_influx) / diff(age_influx)
+interval_sar <- diff(depth_influx) / diff(age_influx)# Calculate sediment accumulation rate between adjacent samples (cm/year)
 
 # Assign a sediment accumulation rate to each sample
-# Interior samples receive the mean of the adjacent interval rates
-sar_cm_yr <- c(
-  interval_sar[1],
-  (head(interval_sar, -1) + tail(interval_sar, -1)) / 2,
-  tail(interval_sar, 1)
-)
-
+sar_cm_yr <- c(interval_sar[1],(head(interval_sar, -1) + tail(interval_sar, -1)) / 2,tail(interval_sar, 1))
 names(sar_cm_yr) <- samples
 
 # Calculate the Lycopodium-based concentration correction
-concentration_factor <- (
-  tablets_added[samples] * lycopodium_per_tablet
-) / (
-  lycopodium_counted[samples] * sediment_volume[samples]
-)
+concentration_factor <- (tablets_added[samples] * lycopodium_per_tablet) / (lycopodium_counted[samples] * sediment_volume[samples])
 
 # Calculate individual taxon concentrations (grains/cm³)
-taxon_concentration <- sweep(
-  as.matrix(influx_counts[samples, , drop = FALSE]),
-  1,
-  concentration_factor,
-  "*"
-)
+taxon_concentration <- sweep(as.matrix(influx_counts[samples, , drop = FALSE]),1,concentration_factor,"*")
 
 # Calculate individual taxon influx (grains/cm²/year)
-taxon_influx <- sweep(
-  taxon_concentration,
-  1,
-  sar_cm_yr,
-  "*"
-)
+taxon_influx <- sweep(taxon_concentration,1,sar_cm_yr,"*")
 
 # Calculate total pollen and spore influx
-total_pollen_spore_influx <- (
-  total_pollen_spore_counts[samples] *
-    concentration_factor *
-    sar_cm_yr
-)
+total_pollen_spore_influx <- (total_pollen_spore_counts[samples] *concentration_factor *sar_cm_yr)
 
 # Summarise the influx calculations for each sample
 influx_summary <- data.frame(
@@ -1254,88 +1129,58 @@ influx_summary <- data.frame(
   Depth_cm = as.numeric(depth_influx),
   Age_cal_BP = as.numeric(age_influx),
   SAR_cm_yr = as.numeric(sar_cm_yr),
-  Total_influx = as.numeric(total_pollen_spore_influx)
-)
+  Total_influx = as.numeric(total_pollen_spore_influx))
 
 print(influx_summary)
 ```
 
 ```{r}
-add_influx_zones <- function() {
-  
-  oldpar <- par(no.readonly = TRUE)
+add_influx_zones <- function() {oldpar <- par(no.readonly = TRUE)
   on.exit(par(oldpar))
-  
   par(
     fig = c(0, 1, 0, 1),
     mar = c(0, 0, 0, 0),
     oma = c(0, 0, 0, 0),
     new = TRUE,
-    xpd = NA
-  )
+    xpd = NA)
   
   plot.new()
-  plot.window(
-    xlim = c(0, 1),
-    ylim = c(0, 1),
-    xaxs = "i",
-    yaxs = "i"
-  )
+  plot.window(xlim = c(0, 1),ylim = c(0, 1),xaxs = "i",yaxs = "i")
   
-  # Convert modelled ages to vertical positions
-  age_to_y <- function(age) {
-    panel_y_limits[2] -
+  age_to_y <- function(age) {panel_y_limits[2] -  # Convert modelled ages to vertical positions
       (age - min(age_diagram_spore)) /
       diff(range(age_diagram_spore)) *
-      diff(panel_y_limits)
-  }
+      diff(panel_y_limits)}
   
   # Divider before the zone column
   segments(
     0.90, panel_y_limits[1],
     0.90, panel_y_limits[2],
-    col = "grey65"
-  )
-  
-  # Zone heading
-  text(0.93, 0.855, "Zone", cex = 0.9)
-  
-  # Vegetation-zone boundaries
-  boundary_y <- age_to_y(boundary_ages)
-  
+    col = "grey65")
+  text(0.93, 0.855, "Zone", cex = 0.9)  # Zone heading
+  boundary_y <- age_to_y(boundary_ages)  # Vegetation-zone boundaries
   segments(
     0.12, boundary_y,
     0.96, boundary_y,
     col = "grey40",
     lty = 2,
-    lwd = 1.2
-  )
+    lwd = 1.2)
   
   # Calculate the centre of each zone
   zone_edges <- c(
     panel_y_limits[2],
     boundary_y,
-    panel_y_limits[1]
-  )
+    panel_y_limits[1])
   
   zone_centres <- (
     head(zone_edges, -1) +
-      tail(zone_edges, -1)
-  ) / 2
+      tail(zone_edges, -1)) / 2
   
   # Zone labels
-  text(
-    0.93,
-    zone_centres,
-    labels = zone_names,
-    cex = 1
-  )
-}
+  text(0.93,zone_centres,labels = zone_names,cex = 1)}
 ```
 
 ## Final influx diagram (PNG)
-
-Influx uses sediment accumulation rates calculated from the PLUM median ages
 
 ```{r}
 
@@ -1347,24 +1192,17 @@ Influx uses sediment accumulation rates calculated from the PLUM median ages
 plot_samples <- rownames(pollen_spore_percentage_subset)
 
 # Prepare individual taxon influx curves
-influx_plot <- as.data.frame(
-  taxon_influx[plot_samples, , drop = FALSE]
-)
+influx_plot <- as.data.frame(taxon_influx[plot_samples, , drop = FALSE])
 
 # Add total pollen and spore influx as the final column
-influx_plot$Total_influx <- as.numeric(
-  total_pollen_spore_influx[plot_samples]
-)
+influx_plot$Total_influx <- as.numeric(total_pollen_spore_influx[plot_samples])
 
 # Use the same functional-group colours as the percentage diagram
 influx_colours <- c(curve_colours_spore, "black")
 
 # Create the influx diagram
 make_influx_diagram <- function() {
-  
-  # Plot individual taxon influx and total influx
-  strat.plot(
-    influx_plot,
+  strat.plot(influx_plot,            # Plot individual taxon influx and total influx
     #yvar = age_diagram_spore,
       yvar = age_diagram_spore[
         rownames(pollen_spore_percentage_subset) %in% plot_samples
@@ -1392,33 +1230,17 @@ make_influx_diagram <- function() {
     yBottom = panel_y_limits[1],
     yTop = panel_y_limits[2],
     wa.order = "none",
-    title = ""
-  )
-  
-  # Add the same sediment depth axis as the percentage diagram
-  secondary.scale()
-  
-  # Add the vegetation-zone boundaries and labels
-  add_influx_zones()
+    title = "")
+  secondary.scale()        #Add the same sediment depth axis as the percentage diagram
+  add_influx_zones()       #Add the vegetation-zone boundaries and labels
 }
-
 # Display the influx diagram
 make_influx_diagram()
 ```
 
 ```{r}
-#| label: save-pollen-spore-influx
-#| include: false
-
-# Save the pollen and spore influx diagram as a 300 dpi PNG
-png(
-  filename = "pollen_spore_influx.png",
-  width = 25,
-  height = 10,
-  units = "in",
-  res = 300,
-  bg = "white"
-)
+# Save
+png(filename = "pollen_spore_influx.png",width = 25,height = 10,units = "in",res = 300,bg = "white")
 
 make_influx_diagram()
 
@@ -1433,36 +1255,20 @@ dev.off()
 test_samples <- rownames(pollen_spore_percentage_subset)
 
 # Rebuild the influx data without changing the originals
-test_influx <- as.data.frame(
-  taxon_influx[test_samples, , drop = FALSE]
-)
-
-test_influx$Total_influx <- as.numeric(
-  total_pollen_spore_influx[test_samples]
-)
+test_influx <- as.data.frame(taxon_influx[test_samples, , drop = FALSE])
+test_influx$Total_influx <- as.numeric(total_pollen_spore_influx[test_samples])
 
 # Identify the basal sample by depth, not row number
-basal_row <- which(
-  depth_midpoint_spore[test_samples] == 25.25
-)
-
+basal_row <- which(depth_midpoint_spore[test_samples] == 25.25)
 
 # Hide basal influx values, but KEEP its age position
 test_influx[basal_row, ] <- NA
 
 # Save a separate PNG
-png(
-  filename = "Influx_TEST_without_basal.png",
-  width = 25,
-  height = 10,
-  units = "in",
-  res = 300,
-  bg = "white"
-)
+png(filename = "Influx_TEST_without_basal.png",width = 25,height = 10, units = "in",res = 300,bg = "white")
 
-# Same plotting settings as your original diagram
-strat.plot(
-  test_influx,
+# Same plotting settings as original diagram
+strat.plot(test_influx,
   yvar = age_diagram_spore,
   y.rev = TRUE,
   y.tks = sort(unique(c(
